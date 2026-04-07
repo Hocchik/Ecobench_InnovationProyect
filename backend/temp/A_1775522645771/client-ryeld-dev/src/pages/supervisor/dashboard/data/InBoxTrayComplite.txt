@@ -1,0 +1,224 @@
+import { Box, Paper, Typography, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
+import { useEffect, useState } from 'react';
+import { ItemDetailsModal } from '../../inventory/components/ItemDetailsModal';
+import { ActivitySummaryModal } from './ActivitySummary';
+import { 
+  /* notifications,  */
+  Notification, 
+  CompletedActivity 
+} from '../../../../api/types';
+
+import { getStatusColor } from '../data/InboxData';
+import { useDashboard } from '../../../../contexts/supervisor/DashboardContext';
+import { users } from '../../../login/data/LoginData';
+
+const InboxTray = () => {
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [activitySummaryOpen, setActivitySummaryOpen] = useState(false);
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [actionType, setActionType] = useState<'approve' | 'reject' | null>(null);
+
+  const { notifications, getNotifications } = useDashboard();
+
+  useEffect(() => {
+    getNotifications();
+  }, [getNotifications]);
+
+  const handleNotificationClick = (notification: Notification) => {
+    setSelectedItem(notification.details);
+    
+    if (notification.type === 'tool_request') {
+      setDetailsModalOpen(true);
+    } else if (notification.type === 'completed_activity') {
+      setActivitySummaryOpen(true);
+    }
+  };
+
+  const handleCloseActivitySummary = () => {
+    setActivitySummaryOpen(false);
+  };
+
+  const handleApproveRequest = () => {
+    setActionType('approve');
+    setConfirmDialogOpen(true);
+  };
+
+  const handleRejectRequest = () => {
+    setActionType('reject');
+    setRejectDialogOpen(true);
+  };
+
+  const confirmAction = () => {
+    if (actionType === 'approve') {
+      console.log('Solicitud aprobada:', selectedItem?.requestNumber);
+      // Aquí iría la lógica para aprobar la solicitud
+    } else if (actionType === 'reject') {
+      console.log('Solicitud rechazada:', selectedItem?.requestNumber, 'Motivo:', rejectReason);
+      // Aquí iría la lógica para rechazar la solicitud
+    }
+    
+    setConfirmDialogOpen(false);
+    setRejectDialogOpen(false);
+    setDetailsModalOpen(false);
+    setRejectReason('');
+  };
+
+  return (
+    <Paper 
+      elevation={0}
+      sx={{ 
+        p: 3, 
+        borderRadius: '20px',
+        background: 'white',
+        boxShadow: '0px 3.5px 5.5px rgba(0, 0, 0, 0.02)',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      }}
+    >
+      <Typography variant="h6" sx={{ color: '#1B2559', fontWeight: 600, mb: 3 }}>
+        Bandeja de Entrada
+      </Typography>
+
+      <Box sx={{ flex: 1, overflow: 'auto' }}>
+        {notifications.length === 0 ? (
+          <Typography sx={{ textAlign: 'center', color: '#A3AED0', py: 3 }}>
+            No hay notificaciones pendientes
+          </Typography>
+        ) : (
+          notifications.map((notification) => (
+            <Box
+              key={notification.id}
+              onClick={() => handleNotificationClick(notification)}
+              sx={{
+                p: 2,
+                mb: 2,
+                border: '1px solid #E2E8F0',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                '&:hover': {
+                  boxShadow: '0px 3.5px 5.5px rgba(0, 0, 0, 0.04)',
+                  transform: 'translateY(-2px)'
+                }
+              }}
+            >
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="subtitle2" sx={{ color: '#1B2559', fontWeight: 500 }}>
+                  {notification.type === 'tool_request' 
+                    ? `Solicitud de Cargo: ${notification.details?.requestNumber}`
+                    : `Actividad Completada: ${(notification.details as CompletedActivity)?.title}`
+                  }
+                </Typography>
+                <Box
+                  sx={{
+                    px: 2,
+                    py: 0.5,
+                    borderRadius: '8px',
+                    fontSize: '0.75rem',
+                    bgcolor: notification.type === 'tool_request' 
+                      ? getStatusColor(notification.details?.status || '').bg
+                      : '#E6FAF5',
+                    color: notification.type === 'tool_request' 
+                      ? getStatusColor(notification.details?.status || '').color
+                      : '#05CD99'
+                  }}
+                >
+                  {notification.type === 'tool_request' 
+                    ? notification.details?.status
+                    : 'Completado'
+                  }
+                </Box>
+              </Box>
+              <Typography variant="body2" sx={{ color: '#A3AED0', mb: 1 }}>
+                Técnico: {notification.technician}
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#A3AED0' }}>
+                Fecha: {notification.date}
+              </Typography>
+            </Box>
+          ))
+        )}
+      </Box>
+
+      {/* Modal para detalles de solicitud de herramientas */}
+      {selectedItem && (
+        <ItemDetailsModal
+          open={detailsModalOpen}
+          onClose={() => setDetailsModalOpen(false)}
+          item={selectedItem}
+          isRequest={true}
+          getStatusColor={getStatusColor}
+          onApprove={handleApproveRequest}
+          onReject={handleRejectRequest}
+        />
+      )}
+
+      {/* Modal para resumen de actividad completada */}
+      {selectedItem && (
+        <ActivitySummaryModal
+          open={activitySummaryOpen}
+          onClose={handleCloseActivitySummary}
+          activity={selectedItem as CompletedActivity}
+          onEdit={() => window.open(`/supervisor/activities/${selectedItem.id}`, '_blank')}
+        />
+      )}
+
+      {/* Diálogo de confirmación para aprobar solicitud */}
+      <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
+        <DialogTitle>Confirmar Acción</DialogTitle>
+        <DialogContent>
+          <Typography>
+            ¿Estás seguro de que deseas aprobar esta solicitud de cargo?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDialogOpen(false)} color="primary">
+            Cancelar
+          </Button>
+          <Button onClick={confirmAction} color="primary" variant="contained">
+            Confirmar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Diálogo para rechazar solicitud con motivo */}
+      <Dialog open={rejectDialogOpen} onClose={() => setRejectDialogOpen(false)}>
+        <DialogTitle>Rechazar Solicitud</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mb: 2 }}>
+            Por favor, indica el motivo por el cual rechazas esta solicitud:
+          </Typography>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Motivo de rechazo"
+            fullWidth
+            multiline
+            rows={4}
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRejectDialogOpen(false)} color="primary">
+            Cancelar
+          </Button>
+          <Button 
+            onClick={confirmAction} 
+            color="primary" 
+            variant="contained"
+            disabled={!rejectReason.trim()}
+          >
+            Rechazar
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Paper>
+  );
+};
+
+export default InboxTray;

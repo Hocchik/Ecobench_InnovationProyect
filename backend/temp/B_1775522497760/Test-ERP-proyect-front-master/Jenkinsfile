@@ -1,0 +1,194 @@
+pipeline {
+    agent any
+    parameters {
+        booleanParam(name: 'DEPLOY_LOCAL', defaultValue: false, description: 'Set to true to run local deploy stage (only if configured)')
+    }
+    options {
+        timestamps()
+    }
+    environment {
+        // Default CI env var for test runners
+        CI = 'true'
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "Checking out repository (Pipeline from SCM)"
+                checkout scm
+            }
+        }
+
+        stage('Detect package manager & scripts') {
+            steps {
+                script {
+                    def pm = 'npm'
+                    
+                    env.PACKAGE_MANAGER = pm
+                    echo "Detected package manager: ${pm}"
+
+                    // Read package.json to detect scripts (safe JSON parsing)
+                    def pkgJson = '{}'
+                    if (fileExists('package.json')) {
+                        pkgJson = readFile('package.json')
+                    }
+                    def pkg = new groovy.json.JsonSlurper().parseText(pkgJson)
+                    // Save flag for build script
+                    env.HAS_BUILD_SCRIPT = (pkg?.scripts?.build) ? 'true' : 'false'
+                    env.HAS_LOCAL_DEPLOY_SCRIPT = (pkg?.scripts?."deploy:local" || pkg?.scripts?.deploy) ? 'true' : 'false'
+                    echo "Has build script: ${env.HAS_BUILD_SCRIPT}"
+                    echo "Has local deploy script: ${env.HAS_LOCAL_DEPLOY_SCRIPT}"
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    def pm = env.PACKAGE_MANAGER ?: 'npm'
+                    if (isUnix()) {
+                        if (pm == 'pnpm') {
+                            sh 'pnpm --version || true'
+                            sh 'pnpm install --frozen-lockfile || pnpm install'
+                        } else if (pm == 'yarn') {
+                            sh 'yarn --version || true'
+                            sh 'yarn install --frozen-lockfile || yarn install'
+                        } else {
+                            if (fileExists('package-lock.json')) {
+                                sh 'npm ci'
+                            } else {
+                                sh 'npm install'
+                            }
+                        }
+                    } else {
+                        if (pm == 'pnpm') {
+                            bat 'pnpm --version || exit 0'
+                            bat 'pnpm install --frozen-lockfile || pnpm install'
+                        } else if (pm == 'yarn') {
+                            bat 'yarn --version || exit 0'
+                            bat 'yarn install --frozen-lockfile || yarn install'
+                        } else {
+                            if (fileExists('package-lock.json')) {
+                                bat 'npm ci'
+                            } else {
+                                bat 'npm install'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                script {
+                    def pm = env.PACKAGE_MANAGER ?: 'npm'
+                    echo "Running tests with ${pm} (CI=true)"
+                    if (isUnix()) {
+                        if (pm == 'pnpm') {
+                            sh 'pnpm test --silent -- --watchAll=false || pnpm run test --silent -- --watchAll=false'
+                        } else if (pm == 'yarn') {
+                            sh 'yarn test --silent --watchAll=false || yarn run test --silent --watchAll=false'
+                        } else {
+                            sh 'npm test --silent -- --watchAll=false || npm run test --silent -- --watchAll=false'
+                        }
+                    } else {
+                        if (pm == 'pnpm') {
+                            bat 'pnpm test --silent -- --watchAll=false || pnpm run test --silent -- --watchAll=false'
+                        } else if (pm == 'yarn') {
+                            bat 'yarn test --silent --watchAll=false || yarn run test --silent -- --watchAll=false'
+                        } else {
+                            bat 'npm test --silent -- --watchAll=false || npm run test --silent -- --watchAll=false'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build') {
+            when {
+                expression { return env.HAS_BUILD_SCRIPT == 'true' }
+            }
+            steps {
+                script {
+                    def pm = env.PACKAGE_MANAGER ?: 'npm'
+                    echo "Building project using ${pm}"
+                    if (isUnix()) {
+                        if (pm == 'pnpm') {
+                            sh 'pnpm run build'
+                        } else if (pm == 'yarn') {
+                            sh 'yarn build'
+                        } else {
+                            sh 'npm run build'
+                        }
+                    } else {
+                        if (pm == 'pnpm') {
+                            bat 'pnpm run build'
+                        } else if (pm == 'yarn') {
+                            bat 'yarn build'
+                        } else {
+                            bat 'npm run build'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Local (optional)') {
+            when {
+                allOf {
+                    expression { return params.DEPLOY_LOCAL }
+                }
+            }
+            steps {
+                script {
+                    if (env.HAS_LOCAL_DEPLOY_SCRIPT == 'true') {
+                        def pm = env.PACKAGE_MANAGER ?: 'npm'
+                        echo "Deploying locally using package script"
+                        if (isUnix()) {
+                            if (pm == 'pnpm') {
+                                sh 'pnpm run deploy:local || pnpm run deploy'
+                            } else if (pm == 'yarn') {
+                                sh 'yarn deploy:local || yarn deploy'
+                            } else {
+                                sh 'npm run deploy:local || npm run deploy'
+                            }
+                        } else {
+                            if (pm == 'pnpm') {
+                                bat 'pnpm run deploy:local || pnpm run deploy'
+                            } else if (pm == 'yarn') {
+                                bat 'yarn deploy:local || yarn deploy'
+                            } else {
+                                bat 'npm run deploy:local || npm run deploy'
+                            }
+                        }
+                    } else {
+                        echo "No `deploy:local` or `deploy` script found in package.json. Add one, or disable DEPLOY_LOCAL param."
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            echo "Pipeline succeeded"
+            script {
+                if (env.HAS_BUILD_SCRIPT == 'true' && fileExists('build')) {
+                    archiveArtifacts artifacts: 'build/**', allowEmptyArchive: true
+                }
+            }
+        }
+        failure {
+            echo "Pipeline failed"
+            script {
+                // Try to collect any test reports or logs if present
+                if (fileExists('coverage')) {
+                    archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+                }
+            }
+        }
+        always {
+            echo "Cleaning workspace"
+            deleteDir()
+        }
+    }
+}
